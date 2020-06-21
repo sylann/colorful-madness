@@ -1,4 +1,10 @@
 
+
+# Actual thing (index.html)
+
+![Screenshot of the page in action](./.github/screenshot.png)
+
+
 # Colors
 
 ## How to?
