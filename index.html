@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <style>
+    body {
+      font-family: sans-serif;
+      font-size: 14px;
+      box-sizing: border-box;
+    }
+    input { font-size: inherit; }
+    .block { display: block; }
+    .bold { font-weight: bold; }
+    .shadow { box-shadow: 1px 1px 3px rgba(0, 0, 0, 0.25); }
+    .mainContainer {
+      position: relative;
+      width: 0;
+      height: 0;
+      margin: 50vh 50vw;
+      transform: translate(var(--pan-x), var(--pan-y)) scale(var(--zoom));
+    }
+    .toastContainer {
+      position: fixed;
+      top: 12px;
+      left: 12px;
+      padding: 8px;
+    }
+    .inputsContainer {
+      position: fixed;
+      bottom: 12px;
+      left: 12px;
+      padding: 8px;
+      background-color: white;
+      border-radius: 3px;
+    }
+    .box {
+      padding: 4px 12px;
+      margin: 8px 0;
+      border-radius: 3px;
+    }
+    .inputBox {
+      width: 100px;
+      border: 2px solid currentColor;
+    }
+    .toast {
+      transition: opacity 200ms 50ms ease-in-out, transform 150ms ease-in-out;
+    }
+    .cell {
+      position: absolute;
+      width: var(--cell-size);
+      height: var(--cell-size);
+      border-radius: 9999px;
+      cursor: pointer;
+      background-color: currentColor;
+      transform: rotate(var(--rotate)) translateX(var(--move));
+    }
+    .hasCursor {
+      z-index: 20;
+    }
+    .hasCursor::before, .hasCursor::after {
+      content: '';
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%) rotate(var(--angle)) scaleY(var(--inverse-zoom));
+      width: 100vw;
+      height: 0;
+      border-top: 1px dashed currentColor;
+      pointer-events: none;
+    }
+    .hasCursor::before { --angle: 0 }
+    .hasCursor::after { --angle: 90deg }
+  </style>
+</head>
+<body style="overflow: hidden">
+
+<div id="plot" class="mainContainer">
+  <div id="mobileCell" class="cell hasCursor"></div>
+</div>
+
+<textarea id="clipboard" style="position: fixed; top:0; left:0; opacity: 0;"></textarea>
+
+<div class="toastContainer">
+  <div id="toast" class="box toast"></div>
+</div>
+
+<div class="inputsContainer shadow">
+  <label for="zoomInput" class="block">Zoom level</label>
+  <input type="number" id="zoomInput" class="box inputBox">
+
+  <label for="cellInput" class="block">Cell size</label>
+  <input type="number" id="cellInput" class="box inputBox">
+
+  <p style="max-width:200px">
+    Input a color hex code manually or select it with the native color input.<br>
+    You may also select named colors directly in the plot.
+  </p>
+  <label for="hexInput" class="block">Current color: <span id="colorName" class="bold"></span></label>
+  <input type="text" id="hexInput" class="box inputBox">
+  <input type="color" id="colorInput" class="box inputBox">
+  <div id="colorBox1" class="box shadow"></div>
+  <div id="colorBox2" class="box shadow"></div>
+  <div id="colorBox3" class="box shadow"></div>
+</div>
+<script src="colors.js"></script>
+<script>
+
+const hexToName = colors.reduce((mapper, v) => { mapper[v.hex] = v.name; return mapper }, {})
+
+var ScreenCtrl = initScreen(document.documentElement)
+ScreenCtrl.setCellInput(document.getElementById('cellInput'))
+ScreenCtrl.setZoomInput(document.getElementById('zoomInput'))
+
+var ToastCtrl = initToast(document.getElementById('toast'))
+var PlotCtrl = initPlot(colors, document.getElementById('plot'))
+PlotCtrl.addToast(ToastCtrl)
+
+var ColorInputCtrl = initColorInputs()
+
+function initScreen(screenEl) {
+  const MIN_ZOOM = .1
+  const MAX_ZOOM = 40
+  const ZOOM_FACTOR = 0.01
+  const ZOOM_STEP = 0.05
+  const MIN_CELL_SIZE = 1
+  const MAX_CELL_SIZE = 20
+  const CELL_STEP = 1
+  var cellSize, zoom, panX, panY
+  var cellInput
+  var zoomInput
+  var moving = false
+
+  setPosition(0, 0)
+  setZoom(3.5)
+  setCellSize(4)
+
+  screenEl.addEventListener("mousedown", event => {
+    if (event.target !== screenEl) return
+    event.preventDefault()
+    moving = true
+  })
+  screenEl.addEventListener("mouseup", event => {
+    moving = false
+  })
+  screenEl.addEventListener("mousemove", event => {
+    if (!moving) return
+    setPosition(panX + event.movementX, panY + event.movementY)
+  })
+  screenEl.addEventListener("wheel", event => {
+    event.preventDefault()
+    if (event.shiftKey || event.altKey) {
+      setCellSize(cellSize + event.deltaY)
+    } else {
+      setZoom(zoom + event.deltaY * ZOOM_FACTOR)
+    }
+  })
+
+  function setPosition (newX, newY) {
+    panX = newX
+    panY = newY
+    screenEl.style.setProperty('--pan-x', `${panX}px`)
+    screenEl.style.setProperty('--pan-y', `${panY}px`)
+    // console.log('[mousemove]', panX, panY)
+  }
+
+  function setZoom (newZoom, fromInputEvent=false) {
+    zoom = Math.min(Math.max(MIN_ZOOM, newZoom), MAX_ZOOM)
+    if (!fromInputEvent && zoomInput) zoomInput.value = zoom - zoom % ZOOM_STEP
+    screenEl.style.setProperty('--zoom', zoom)
+    screenEl.style.setProperty('--inverse-zoom', 1 / zoom)
+  }
+
+  function setZoomInput (el) {
+    zoomInput = el
+    el.value = zoom
+    el.step = ZOOM_STEP
+    el.min = MIN_ZOOM
+    el.max = MAX_ZOOM
+    el.addEventListener('input', event => {
+      setZoom(Number(event.target.value), true)
+    })
+  }
+
+  function setCellSize(newSize, fromInputEvent=false) {
+    if (!Number.isInteger(newSize)) return
+    cellSize = Math.min(Math.max(MIN_CELL_SIZE, newSize), MAX_CELL_SIZE)
+    if (!fromInputEvent && cellInput) cellInput.value = cellSize - cellSize % CELL_STEP
+    screenEl.style.setProperty('--cell-size', `${cellSize}px`)
+  }
+
+  function setCellInput (el) {
+    cellInput = el
+    el.value = cellSize
+    el.min = MIN_CELL_SIZE
+    el.max = MAX_CELL_SIZE
+    el.addEventListener('input', event => {
+      setCellSize(Number(event.target.value), true)
+    })
+  }
+
+  return { setCellInput, setZoomInput }
+}
+
+function initPlot (colors, plotEl) {
+  const clip = document.getElementById('clipboard')
+  const toasts = []
+
+  for (let c of colors) {
+    const el = document.createElement('div')
+    el.classList.add('cell')
+    c = Object.assign(c, rgbToHsl(c.hex)) // override h s l (they seem to be wrong, bad wikipedia! bad!)
+    updateCellProperties(el, c)
+    el.addEventListener('click', function copyToClipboard (event) {
+      console.log('[Debug] c.hex =', c.hex)
+      clip.value = c.hex
+      clip.focus()
+      clip.select()
+      document.execCommand('copy')
+      for (const t of toasts) t.show(c)
+    })
+    plotEl.appendChild(el)
+  }
+
+  function updateCellProperties (cellEl, { hex, h, s, l, name }) {
+    // cellEl.style.color = `hsl(${h}, ${s}%, ${l}%)`
+    cellEl.style.color = hex
+    cellEl.style.setProperty('--rotate', `-${h}deg`)
+    cellEl.style.setProperty('--move', `${100 - l}px`)
+    cellEl.title = `${hex} (${h.toFixed(1)}° ${s.toFixed(1)}% ${l.toFixed(1)}%) - ${name || 'Unknown'}`
+  }
+
+  function addToast (ToastCtrl) {
+    toasts.push(ToastCtrl)
+  }
+
+  return { addToast, updateCellProperties }
+}
+
+function initToast(toastEl, lumaFunc = luminance709) {
+  var toastTimeout
+  var initTransform = 'translateX(-100%)'
+  var initOpacity = '0'
+  var shownTransform = 'translateX(0)'
+  var shownOpacity = '1'
+  reset()
+
+  function reset () {
+    toastEl.style.opacity = initOpacity
+    toastEl.style.transform = initTransform
+    toastTimeout = null
+  }
+
+  function show (color) {
+    ColorInputCtrl.updateColor(color.hex)
+    if (toastTimeout) {
+      clearTimeout(toastTimeout)
+      reset()
+      delay = 100
+    } else {
+      delay = 0
+    }
+    setTimeout(() => {
+      toastEl.textContent = `Copied ${color.hex} (${color.name})`
+      toastEl.style.backgroundColor = color.hex
+      toastEl.style.color = getMaxContrast(color.hex, lumaFunc)
+      toastEl.style.opacity = shownOpacity
+      toastEl.style.transform = shownTransform
+      toastTimeout = setTimeout(reset, 2500)
+    }, delay)
+  }
+
+  return { show, reset }
+}
+
+function initColorInputs () {
+  const hexInput = document.getElementById('hexInput')
+  const colorName = document.getElementById('colorName')
+  const colorInput = document.getElementById('colorInput')
+  const colorBox1 = document.getElementById('colorBox1')
+  const colorBox2 = document.getElementById('colorBox2')
+  const colorBox3 = document.getElementById('colorBox3')
+  const mobileCell = document.getElementById('mobileCell')
+
+  const FALLBACK_NAME = 'Unnamed color'
+
+  setColorName()
+  colorBox1.textContent = 'luminance 601'
+  colorBox2.textContent = 'luminance 709'
+  colorBox3.textContent = 'luminance 240'
+
+  hexInput.pattern = '^#[0-9a-fA-F]{6}$'
+  hexInput.placeholder = 'e.g. #5e5beb'
+
+  hexInput.addEventListener('input', event => {
+    if (!event.target.value || !hexInput.validity.valid) return
+
+    colorInput.value = event.target.value
+    updateBoxes(event.target.value)
+  })
+  colorInput.addEventListener('input', event => {
+    hexInput.value = event.target.value
+    updateBoxes(event.target.value)
+  })
+
+  function setColorName (hexColor) {
+    colorName.textContent = hexToName[hexColor] || FALLBACK_NAME
+  }
+
+  function updateBoxes (hexColor) {
+    setColorName(hexColor)
+    colorBox1.style.backgroundColor = hexColor
+    colorBox2.style.backgroundColor = hexColor
+    colorBox3.style.backgroundColor = hexColor
+    colorBox1.style.color = getMaxContrast(hexColor, luminance601)
+    colorBox2.style.color = getMaxContrast(hexColor, luminance709)
+    colorBox3.style.color = getMaxContrast(hexColor, luminance240)
+    updateMobileCell(hexColor)
+  }
+
+  function updateMobileCell (hexColor) {
+    PlotCtrl.updateCellProperties(mobileCell, {
+      hex: hexColor,
+      name: FALLBACK_NAME,
+      ...rgbToHsl(hexColor),
+    })
+  }
+
+  function updateColor (hexColor) {
+    colorInput.value = hexColor
+    hexInput.value = hexColor
+    updateBoxes(hexColor)
+  }
+
+  return { updateColor }
+}
+
+function getMaxContrast(hexColor, luminance) {
+  const L = luminance(hexColor)
+  // https://www.w3.org/TR/WCAG20/ > Appendix A: Glossary > contrast ratio
+  // If contrast with black (0) is higher than contrast with white (1) use black, and vice versa
+  return (L + 0.05) / (0 + 0.05) > (1 + 0.05) / (L + 0.05) ? '#000' : '#fff'
+}
+function hexToRgbParts (hexColor) {
+  return [1, 3, 5].map(i => parseInt(hexColor.substr(i, 2), 16) / 255)
+}
+function hexToLumaRGBParts (hexColor) {
+  return hexToRgbParts(hexColor).map(v => {
+    return (v <= 0.03928) ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4)
+  })
+}
+function luminance601 (hexColor) {
+  const [r, g, b] = hexToLumaRGBParts(hexColor)
+  return 0.299 * r + 0.587 * g + 0.114 * b // CCIR 601
+}
+function luminance709 (hexColor) {
+  const [r, g, b] = hexToLumaRGBParts(hexColor)
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b // BT.709
+}
+function luminance240 (hexColor) {
+  const [r, g, b] = hexToLumaRGBParts(hexColor)
+  return 0.212 * r + 0.701 * g + 0.087 * b // SMPTE 240M
+}
+function rgbToHsl(hexColor) {
+  // Adapted from https://gist.github.com/mjackson/5311256
+  const [r, g, b] = hexToRgbParts(hexColor)
+
+  var max = Math.max(r, g, b), min = Math.min(r, g, b)
+
+  if (max == min)  return { h: 0, s: 0, l: 0 } // achromatic
+
+  const d = max - min
+  const l = (max + min) / 2 * 100
+  const s = d / (l > 0.5 ? (2 - max - min) : (max + min)) * 100
+
+  const h = (
+    max == r ?  (g - b) / d + (g < b ? 6 : 0)  :
+    max == g ?  (b - r) / d + 2                :
+    /*  == b */ (r - g) / d + 4
+  ) / 6 * 360
+
+  return { h, s, l }
+}
+</script>
+</body>
+</html>
